@@ -1,0 +1,132 @@
+name: docker
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        # Needed to build the arm64 image on an amd64 runner.
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # A pull request from a fork has no access to the registry, and should not:
+      # it would let anyone opening a PR publish an image. PRs therefore build
+      # and are verified, but never push.
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # Multi-arch because the ffmpeg base image publishes both, and an
+          # arm64 build is genuinely useful for running the receiver on small
+          # hardware near the ingest.
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          # A PR still needs a local image to smoke-test, and load only works
+          # for a single platform.
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ github.event_name == 'pull_request' && 'srtbench:pr' || steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # An image that builds is not an image that works. srtbench shells out to
+      # ffmpeg, and most distributions ship one without libvmaf -- so the build
+      # succeeding tells you nothing about whether the runtime can actually
+      # score anything. These checks fail the workflow if it cannot.
+      - name: Smoke-test the image
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          IMAGE=srtbench:pr
+
+          echo "--- version ---"
+          docker run --rm "$IMAGE" version
+
+          echo "--- ffmpeg has libsrt and libvmaf ---"
+          docker run --rm --entrypoint ffmpeg "$IMAGE" -hide_banner -version | head -1
+          for f in libsrt libvmaf; do
+            if ! docker run --rm --entrypoint ffmpeg "$IMAGE" -hide_banner -version | grep -q -- "$f"; then
+              echo "runtime ffmpeg is missing $f"
+              exit 1
+            fi
+            echo "  $f ok"
+          done
+
+          echo "--- ffprobe present (the reference pass needs it) ---"
+          docker run --rm --entrypoint ffprobe "$IMAGE" -hide_banner -version | head -1
+
+          echo "--- libvmaf actually runs (the model must be present, not just linked) ---"
+          docker run --rm --entrypoint ffmpeg "$IMAGE" -hide_banner -loglevel info \
+            -f lavfi -i "testsrc2=size=320x240:rate=10:duration=1" \
+            -f lavfi -i "testsrc2=size=320x240:rate=10:duration=1" \
+            -lavfi "[0:v][1:v]libvmaf" -f null - 2>&1 | grep -q "VMAF score" \
+            || { echo "libvmaf is linked but produced no score"; exit 1; }
+          echo "  libvmaf ok"
+
+          echo "--- end to end: stream, measure, score ---"
+          out=$(docker run --rm "$IMAGE" run \
+                  -endpoint srt://127.0.0.1:8890 -size 320x240 -fps 30 \
+                  -bitrate 800 -profile h264-720p -csv - -duration 20)
+          echo "$out" | tail -3
+          # A run that produces no scored window means the pipeline is broken
+          # even though every component reported success.
+          scored=$(echo "$out" | awk -F, 'NR>1 && $NF!="" && $0 ~ /,true,/ {n++} END {print n+0}')
+          echo "scored windows: $scored"
+          test "$scored" -ge 3 || { echo "expected at least 3 scored windows"; exit 1; }
+
+      - name: Summary
+        if: github.event_name != 'pull_request'
+        run: |
+          {
+            echo "### Image published"
+            echo
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo
+            echo "digest: \`${{ steps.build.outputs.digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

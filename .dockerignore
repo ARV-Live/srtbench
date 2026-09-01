@@ -1,0 +1,12 @@
+.git
+.github
+*.exe
+srtbench
+dist/
+grafana/
+*.csv
+*.ts
+*.log
+*-fitted.yaml
+configs/*
+!configs/example.yaml

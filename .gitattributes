@@ -1,0 +1,8 @@
+# Normalise to LF in the repository. Without this a Windows checkout commits
+# CRLF, and the shell scripts inside the GitHub workflows then fail on the
+# Linux runners with an unhelpful "bad interpreter" style error.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ts  binary

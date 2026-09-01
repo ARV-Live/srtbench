@@ -1,0 +1,79 @@
+# srtbench example configuration.
+# Precedence: flags > SRTBENCH_* environment > this file > built-in defaults.
+
+srt:
+  # Receiver: bind here. Sender: dial here.
+  endpoint: "srt://127.0.0.1:8890"
+  mode: listener            # listener | caller
+  # SRT latency budget. This is the single most important knob for what the
+  # score measures: it decides how much loss ARQ can recover before SRT gives
+  # up and the loss becomes residual damage.
+  latency: 3s
+  # Applies to whichever direction is running, when no directional id is set.
+  streamid: ""
+
+  # Set BOTH of these to make `run` round-trip a real server: the sender
+  # publishes to the endpoint and the receiver reads the same stream back, so
+  # the score covers the whole path through the server instead of a local
+  # socket talking to itself. Used verbatim -- the prefix convention belongs to
+  # the server, not to srtbench. MediaMTX uses publish:<key> / read:<key>.
+  #
+  # Setting only one is refused rather than quietly falling back to loopback.
+  publish_streamid: ""      # e.g. "publish:2f9c...-key"
+  read_streamid: ""         # e.g. "read:2f9c...-key"
+
+  passphrase: ""
+
+media:
+  # Leave input empty for deterministic synthetic sources, which the receiver
+  # can regenerate locally as a reference with no file transfer.
+  input: ""
+  width: 1920
+  height: 1080
+  fps: 30
+  # libx264 by default. libx265 is much heavier to encode, and a sender that
+  # cannot keep up produces degradation indistinguishable from network damage.
+  vcodec: libx264
+  vbitrate_kbps: 4500
+  acodec: aac
+  abitrate_kbps: 128
+  no_audio: false
+  gop: 60
+
+qoe:
+  interval: 1s
+  # Must match the codec and resolution above, or the score is computed against
+  # the wrong coefficients. See: srtbench profiles
+  profile: h264-1080p
+  reference: true
+  ref_window: 5s
+  ref_period: 30s
+  # 8 threads measured a 5x speedup over single-threaded for a bit-identical
+  # score; beyond 8 gives nothing further.
+  vmaf_threads: 8
+  # A profile written by `srtbench calibrate`. Takes precedence over `profile`
+  # above, and layers onto whatever base it names.
+  profile_path: ""
+
+influx:
+  # Point at an existing InfluxDB 2.x. The tool never ships one.
+  url: ""                   # e.g. http://localhost:8086
+  token: ""
+  org: ""
+  bucket: "srtbench"
+  # Works with no database at all. "-" prints to stdout.
+  csv: ""
+
+impair:
+  # Deliberate damage on the send path, for plotting degradation curves.
+  loss_pct: 0
+  # Mobile uplinks fail in bursts, and burst loss is far more damaging than the
+  # same percentage spread uniformly.
+  burst_len: 1
+  delay: 0s
+  jitter: 0s
+  seed: 0                   # fixed seed keeps a sweep reproducible
+
+session:
+  id: ""                    # auto-generated when empty
+  host: ""

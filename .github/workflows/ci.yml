@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      # ffmpeg is needed by the tests that exercise the decode and
+      # full-reference paths. The distribution package has libsrt but NOT
+      # libvmaf, so the VMAF tests detect that and skip rather than fail --
+      # they are testing a capability the host does not have, which is not the
+      # same as the tool being broken. Everything else runs.
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -hide_banner -version | head -1
+
+      - name: Test
+        run: go test ./... -race -count=1
+
+      - name: Report which optional capabilities were available
+        if: always()
+        run: |
+          for f in libsrt libvmaf; do
+            if ffmpeg -hide_banner -version | grep -q -- "$f"; then
+              echo "$f: available"
+            else
+              echo "$f: absent (tests needing it were skipped)"
+            fi
+          done

@@ -1,0 +1,23 @@
+srtbench
+Copyright 2026 ARV Live
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+---
+
+srtbench runs ffmpeg (https://ffmpeg.org) as a child process for encoding,
+decoding and full-reference quality measurement. ffmpeg is not distributed as
+part of this source repository. The published container image is built on
+linuxserver/ffmpeg and therefore includes an ffmpeg build under that project's
+own licence terms.
+
+---
+
+The quality model is structured after ITU-T G.1070, and the audio term keeps
+the Ie,eff structure of ITU-T G.107. The STRUCTURE is taken from those
+standards; the COEFFICIENTS shipped with this project are not the published
+table values and must not be cited as such. They are derived from stated
+anchor points, and every one is labelled with its provenance at runtime.
+
+See internal/qoe/defaults.go for the derivations, and run `srtbench profiles`
+to print what each shipped profile actually claims about itself.

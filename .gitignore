@@ -1,0 +1,24 @@
+# Build artefacts. These are ROOT-ANCHORED with a leading slash: a bare
+# "srtbench" would also match the cmd/srtbench source directory, because git
+# matches an unanchored pattern at any depth -- which silently excluded the
+# entire command from the repository.
+/srtbench
+/srtbench.exe
+/dist/
+
+# Local configuration. Config files carry InfluxDB tokens and SRT stream keys,
+# so nothing in configs/ is tracked except the documented example. Anything
+# dropped in here is ignored by default rather than by remembering to.
+configs/*
+!configs/example.yaml
+
+# Fitted profiles are machine- and path-specific.
+*-fitted.yaml
+
+# Tooling scratch
+.impeccable/
+
+# Measurement output
+*.csv
+*.ts
+*.log
