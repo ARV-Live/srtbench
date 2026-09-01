@@ -148,7 +148,16 @@ func measure(ctx context.Context, cfg config.Config, prof qoe.Profile,
 
 	var ref *refRunner
 	if cfg.QoE.Reference {
-		ref = newRefRunner(cfg, prof, out, verbose)
+		if ok, why := referenceUsable(cfg); ok {
+			ref = newRefRunner(cfg, prof, out, verbose)
+		} else {
+			// Silence here would be the dangerous option: the dashboard would
+			// simply show no ground truth and nobody would know why.
+			fmt.Fprintf(os.Stderr,
+				"srtbench: full-reference scoring is off for this run - %s.\n"+
+					"  The parametric MOS is unaffected. To get ground truth here, "+
+					"stream a real file with -input <path> reachable from both ends.\n", why)
+		}
 	}
 
 	start := time.Now()

@@ -1,0 +1,117 @@
+# srtbench against your own SRT ingest.
+#
+#   cp .env.example .env      # fill in hosts, keys and the InfluxDB token
+#   docker compose up -d      # continuous monitoring
+#
+# What this does: srtbench publishes a synthetic test stream INTO your ingest,
+# reads the same stream back OUT of it, and scores the round trip. So the number
+# covers your whole path -- encoder side, the server, and the delivery side --
+# rather than a socket talking to itself.
+#
+# No ports are published, and none are needed: on a round trip srtbench is a
+# CALLER in both directions, so every connection is outbound.
+#
+# Reconnection is the restart policy's job. srtbench exits when a leg drops, and
+# `restart: unless-stopped` brings it back; that is deliberate, because a fresh
+# process starts from a clean counter baseline rather than trying to reason
+# about statistics that reset underneath it.
+
+x-common: &common
+  image: ghcr.io/arv-live/srtbench:${SRTBENCH_TAG:-latest}
+  restart: unless-stopped
+  # VMAF is the only CPU-hungry part and it is off on a round trip (see below),
+  # so this is mostly bounding the x264 encoder. Raise it if you test 1080p60.
+  cpus: ${SRTBENCH_CPUS:-2.0}
+  mem_limit: ${SRTBENCH_MEMORY:-512m}
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+  volumes:
+    # Only used when CSV_PATH points under /out.
+    - ./out:/out
+
+x-output: &output
+  SRTBENCH_INFLUX_URL: ${INFLUX_URL}
+  SRTBENCH_INFLUX_TOKEN: ${INFLUX_TOKEN}
+  SRTBENCH_INFLUX_ORG: ${INFLUX_ORG}
+  SRTBENCH_INFLUX_BUCKET: ${INFLUX_BUCKET:-srtbench}
+  # Optional, and usable INSTEAD of InfluxDB: set CSV_PATH to a file under
+  # /out (mounted below) or to "-" for stdout. At least one output must be
+  # configured or srtbench refuses to start rather than measure into a void.
+  SRTBENCH_CSV: ${CSV_PATH:-}
+
+services:
+  # ---------------------------------------------------------------------------
+  # Continuous monitoring. Publishes a test stream 24/7, so it holds a path open
+  # on your server and uses its bitrate continuously -- budget for that, and use
+  # a stream key reserved for testing rather than a production one.
+  # ---------------------------------------------------------------------------
+  ingest-primary:
+    <<: *common
+    container_name: srtbench-primary
+    command: ["run", "-v"]
+    environment:
+      <<: *output
+      SRTBENCH_ENDPOINT: srt://${PRIMARY_HOST}:${PRIMARY_PORT:-8890}
+      SRTBENCH_PUBLISH_STREAMID: ${PRIMARY_PUBLISH_STREAMID}
+      SRTBENCH_READ_STREAMID: ${PRIMARY_READ_STREAMID}
+      SRTBENCH_LATENCY: ${SRT_LATENCY:-3s}
+      # Tags every measurement, so one dashboard can hold several ingests and
+      # the Session variable tells them apart.
+      SRTBENCH_SESSION_ID: primary
+      SRTBENCH_PROFILE: ${PROFILE:-h264-1080p}
+      SRTBENCH_SIZE: ${SIZE:-1920x1080}
+      SRTBENCH_FPS: ${FPS:-30}
+      SRTBENCH_VCODEC: ${VCODEC:-libx264}
+      SRTBENCH_VBITRATE_KBPS: ${BITRATE_KBPS:-4500}
+
+  # A second ingest. Copy this block per endpoint; only the four PRIMARY_/
+  # SECONDARY_ variables and the session id need to change.
+  ingest-secondary:
+    <<: *common
+    container_name: srtbench-secondary
+    profiles: ["secondary"]
+    command: ["run", "-v"]
+    environment:
+      <<: *output
+      SRTBENCH_ENDPOINT: srt://${SECONDARY_HOST:-}:${SECONDARY_PORT:-8890}
+      SRTBENCH_PUBLISH_STREAMID: ${SECONDARY_PUBLISH_STREAMID:-}
+      SRTBENCH_READ_STREAMID: ${SECONDARY_READ_STREAMID:-}
+      SRTBENCH_LATENCY: ${SRT_LATENCY:-3s}
+      SRTBENCH_SESSION_ID: secondary
+      SRTBENCH_PROFILE: ${PROFILE:-h264-1080p}
+      SRTBENCH_SIZE: ${SIZE:-1920x1080}
+      SRTBENCH_FPS: ${FPS:-30}
+      SRTBENCH_VCODEC: ${VCODEC:-libx264}
+      SRTBENCH_VBITRATE_KBPS: ${BITRATE_KBPS:-4500}
+
+  # ---------------------------------------------------------------------------
+  # Periodic probe:  docker compose --profile periodic up -d
+  #
+  # Runs a bounded test, then idles. Use this instead of the continuous services
+  # when you do not want a synthetic stream permanently occupying a path. It
+  # gives you a regular sample of the ingest's health rather than a live feed.
+  # ---------------------------------------------------------------------------
+  ingest-periodic:
+    <<: *common
+    container_name: srtbench-periodic
+    profiles: ["periodic"]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          srtbench run -duration "${PROBE_SECONDS:-120}" -v || true
+          sleep "${PROBE_INTERVAL_SECONDS:-900}"
+        done
+    environment:
+      <<: *output
+      SRTBENCH_ENDPOINT: srt://${PRIMARY_HOST}:${PRIMARY_PORT:-8890}
+      SRTBENCH_PUBLISH_STREAMID: ${PRIMARY_PUBLISH_STREAMID}
+      SRTBENCH_READ_STREAMID: ${PRIMARY_READ_STREAMID}
+      SRTBENCH_LATENCY: ${SRT_LATENCY:-3s}
+      SRTBENCH_SESSION_ID: periodic
+      SRTBENCH_PROFILE: ${PROFILE:-h264-1080p}
+      SRTBENCH_SIZE: ${SIZE:-1920x1080}
+      SRTBENCH_FPS: ${FPS:-30}
+      SRTBENCH_VCODEC: ${VCODEC:-libx264}
+      SRTBENCH_VBITRATE_KBPS: ${BITRATE_KBPS:-4500}

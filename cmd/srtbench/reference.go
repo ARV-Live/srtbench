@@ -38,6 +38,36 @@ type refRunner struct {
 	verbose  bool
 }
 
+// referenceUsable reports whether a locally regenerated reference can actually
+// be located on this stream's timeline.
+//
+// It cannot when we READ from a server. The synthetic reference is a function
+// of time from the start of the encode, and the receiver locates it as
+// (segment keyframe PTS - the first PTS this receiver ever saw). That only
+// works if the receiver observed the stream from its beginning, which is true
+// when it is the listener our own sender connects to, and false the moment a
+// server sits in the middle: the read leg carries the SERVER's timeline and
+// begins wherever the reader happened to join.
+//
+// Measured, through MediaMTX: a round trip that scored a healthy 4.0 parametric
+// MOS reported VMAF 7.9, 11.2 and 24.5 for the same seconds -- not damage, just
+// the wrong frames compared against each other. Emitting that as ground truth
+// would be worse than emitting nothing, because it looks like a measurement and
+// would drag any calibration fitted against it badly wrong.
+//
+// A real reference FILE is unaffected: it is located by content, not by our
+// timeline, so -input with a shared file works either way.
+func referenceUsable(cfg config.Config) (bool, string) {
+	if cfg.Media.Input != "" {
+		return true, ""
+	}
+	if cfg.SRT.RoundTrip() || cfg.SRT.Mode == "caller" {
+		return false, "the stream is read back from a server, so its timeline is " +
+			"the server's and a locally regenerated reference cannot be located on it"
+	}
+	return true, ""
+}
+
 func newRefRunner(cfg config.Config, prof qoe.Profile, out sink.Sink, verbose bool) *refRunner {
 	os.MkdirAll(refqual.TempDir(), 0o755)
 	return &refRunner{

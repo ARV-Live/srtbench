@@ -151,3 +151,85 @@ func TestStreamIDsFromEnv(t *testing.T) {
 		t.Errorf("env not applied: %+v", c.SRT)
 	}
 }
+
+// The coefficients are codec- and resolution-specific, so a mismatched profile
+// produces a confident number computed against the wrong curve. Nothing
+// downstream would notice, which is why it is refused up front.
+func TestProfileMustMatchMedia(t *testing.T) {
+	cases := []struct {
+		name    string
+		codec   string
+		height  int
+		profile string
+		wantErr string
+	}{
+		{"h264 1080p ok", "libx264", 1080, "h264-1080p", ""},
+		{"h265 720p ok", "libx265", 720, "h265-720p", ""},
+		{"codec mismatch", "libx265", 1080, "h264-1080p", "h265-*"},
+		{"resolution mismatch", "libx264", 1080, "h264-720p", "*-1080p"},
+		{"both wrong", "libx265", 720, "h264-1080p", "h265-*"},
+	}
+	for _, c := range cases {
+		cfg := Default()
+		cfg.Influx.CSV = "-"
+		cfg.Media.VideoCodec = c.codec
+		cfg.Media.Height = c.height
+		cfg.QoE.Profile = c.profile
+
+		err := cfg.Validate()
+		if c.wantErr == "" {
+			if err != nil {
+				t.Errorf("%s: rejected a matching pair: %v", c.name, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("%s: accepted %s at %dp with profile %s",
+				c.name, c.codec, c.height, c.profile)
+			continue
+		}
+		if !contains(err.Error(), c.wantErr) {
+			t.Errorf("%s: error %q does not suggest %q", c.name, err, c.wantErr)
+		}
+	}
+}
+
+// A fitted profile can legitimately be named anything, so the check must not
+// second-guess one.
+func TestFittedProfileSkipsTheMediaCheck(t *testing.T) {
+	cfg := Default()
+	cfg.Influx.CSV = "-"
+	cfg.QoE.ProfilePath = "/some/fitted.yaml"
+	cfg.QoE.Profile = "h264-720p" // would otherwise clash with 1080p defaults
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("a fitted profile was subjected to the name check: %v", err)
+	}
+}
+
+// Resolution has to be settable from the environment, or a containerised run
+// can set a 720p profile while still streaming 1080p.
+func TestMediaFromEnv(t *testing.T) {
+	for k, v := range map[string]string{
+		"SRTBENCH_SIZE": "1280x720", "SRTBENCH_FPS": "60",
+		"SRTBENCH_VCODEC": "libx265", "SRTBENCH_ABITRATE_KBPS": "96",
+	} {
+		os.Setenv(k, v)
+		defer os.Unsetenv(k)
+	}
+	c, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Media.Width != 1280 || c.Media.Height != 720 {
+		t.Errorf("size = %dx%d, want 1280x720", c.Media.Width, c.Media.Height)
+	}
+	if c.Media.FPS != 60 {
+		t.Errorf("fps = %d", c.Media.FPS)
+	}
+	if c.Media.VideoCodec != "libx265" {
+		t.Errorf("vcodec = %q", c.Media.VideoCodec)
+	}
+	if c.Media.AudioKbps != 96 {
+		t.Errorf("abitrate = %d", c.Media.AudioKbps)
+	}
+}

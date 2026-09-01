@@ -215,6 +215,29 @@ func (c *Config) applyEnv() {
 			c.Media.VideoKbps = n
 		}
 	})
+	env("ABITRATE_KBPS", func(v string) {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Media.AudioKbps = n
+		}
+	})
+	env("FPS", func(v string) {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Media.FPS = n
+		}
+	})
+	env("VCODEC", func(v string) { c.Media.VideoCodec = v })
+	env("INPUT", func(v string) { c.Media.Input = v })
+	env("PROFILE_FILE", func(v string) { c.QoE.ProfilePath = v })
+	// Resolution as WxH, matching the -size flag. Without this a containerised
+	// run could set a 720p PROFILE while still streaming 1080p, and the score
+	// would be computed against the wrong coefficients with nothing to show for
+	// it -- the most quietly wrong state the tool can be in.
+	env("SIZE", func(v string) {
+		var w, h int
+		if _, err := fmt.Sscanf(v, "%dx%d", &w, &h); err == nil && w > 0 && h > 0 {
+			c.Media.Width, c.Media.Height = w, h
+		}
+	})
 }
 
 // Validate reports configuration that cannot work, before anything is started.
@@ -237,6 +260,47 @@ func (c Config) Validate() error {
 	}
 	if c.Impair.LossPct < 0 || c.Impair.LossPct > 100 {
 		return fmt.Errorf("impair.loss_pct %.2f is outside 0..100", c.Impair.LossPct)
+	}
+	if err := c.checkProfileMatchesMedia(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// checkProfileMatchesMedia catches a profile that does not describe the media
+// being sent.
+//
+// The coefficients are codec- and resolution-specific, so scoring 1080p HEVC
+// with the h264-720p profile produces a confident number computed against the
+// wrong curve. Nothing else in the system would notice, which is exactly why it
+// is worth refusing up front.
+func (c Config) checkProfileMatchesMedia() error {
+	// A fitted profile names its own base and may legitimately be called
+	// anything, so this only applies to the shipped names.
+	if c.QoE.ProfilePath != "" || c.QoE.Profile == "" {
+		return nil
+	}
+	name := c.QoE.Profile
+	wantCodec := "h264"
+	if strings.Contains(c.Media.VideoCodec, "265") || strings.Contains(c.Media.VideoCodec, "hevc") {
+		wantCodec = "h265"
+	}
+	if !strings.HasPrefix(name, wantCodec) {
+		return fmt.Errorf(
+			"profile %q does not match vcodec %q: use a %s-* profile, or change the codec.\n"+
+				"The coefficients are codec-specific, so the score would be computed "+
+				"against the wrong curve", name, c.Media.VideoCodec, wantCodec)
+	}
+	// Height is the honest discriminator; width varies with aspect ratio.
+	wantRes := "1080p"
+	if c.Media.Height > 0 && c.Media.Height <= 800 {
+		wantRes = "720p"
+	}
+	if !strings.Contains(name, wantRes) {
+		return fmt.Errorf(
+			"profile %q does not match %dx%d: use a *-%s profile, or change the resolution.\n"+
+				"The coefficients are resolution-specific, so the score would be "+
+				"computed against the wrong curve", name, c.Media.Width, c.Media.Height, wantRes)
 	}
 	return nil
 }

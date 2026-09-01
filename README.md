@@ -113,6 +113,52 @@ cosmetic: `localhost` answers `::1` before `127.0.0.1` on most systems, a
 listener on `0.0.0.0` is IPv4-only, and the mismatch produces no error at
 either end — the connection simply never happens.
 
+## Monitoring your own ingest (Docker Compose)
+
+[`deploy/compose.yaml`](deploy/compose.yaml) runs srtbench against a real
+server: it publishes a test stream in, reads the same stream back out, and
+scores the round trip, so the number covers the whole path rather than a socket
+talking to itself.
+
+```bash
+cd deploy
+cp .env.example .env      # ingest host, stream keys, InfluxDB token
+docker compose up -d      # continuous monitoring
+```
+
+No ports are published and none are needed — on a round trip srtbench is a
+caller in both directions, so every connection is outbound. Reconnection is the
+restart policy's job: srtbench exits when a leg drops and Docker restarts it,
+which is deliberate, because a fresh process starts from a clean counter
+baseline instead of reasoning about statistics that reset underneath it.
+
+Three ways to run it:
+
+| | |
+|---|---|
+| `docker compose up -d` | Continuous. Holds a path open on your server permanently and uses its bitrate 24/7 — use a stream key reserved for testing. |
+| `docker compose --profile periodic up -d` | A bounded probe every N minutes. Samples the ingest's health without occupying a path. |
+| `docker compose --profile secondary up -d` | Adds a second ingest. Each is tagged with its own session id, so one dashboard holds them all. |
+
+Output goes to InfluxDB, or to CSV via `CSV_PATH` if you have no database.
+
+**`PROFILE`, `SIZE` and `VCODEC` must agree**, and srtbench refuses to start if
+they do not. The coefficients are codec- and resolution-specific, so a mismatch
+produces a confident score computed against the wrong curve — and nothing
+downstream would ever reveal it.
+
+**Full-reference VMAF is automatically off on a round trip**, and srtbench says
+so at startup. The synthetic reference is a function of time from the start of
+the encode, and it is located using the receiver's own view of the timeline —
+which only works when the receiver saw the stream from its beginning. Once a
+server sits in the middle, the read leg carries *its* timeline and begins
+wherever the reader joined. Measured through MediaMTX: a round trip scoring a
+healthy 4.0 parametric MOS reported VMAF 7.9, 11.2 and 24.5 for the same
+seconds — not damage, just the wrong frames compared against each other.
+Publishing that as ground truth would be worse than publishing none. Stream a
+real file with `-input` reachable from both ends if you need ground truth
+across a server.
+
 ## What the MOS number means, and what it does not
 
 **Read this before quoting a score.**

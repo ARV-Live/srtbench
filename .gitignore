@@ -12,11 +12,18 @@
 configs/*
 !configs/example.yaml
 
+# Environment files hold the InfluxDB token and stream keys.
+.env
+deploy/.env
+
 # Fitted profiles are machine- and path-specific.
 *-fitted.yaml
 
 # Tooling scratch
 .impeccable/
+
+# Compose output volume
+deploy/out/
 
 # Measurement output
 *.csv
