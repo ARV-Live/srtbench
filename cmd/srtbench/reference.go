@@ -81,6 +81,10 @@ func newRefRunner(cfg config.Config, prof qoe.Profile, out sink.Sink, verbose bo
 			FPS:       cfg.Media.FPS,
 			Threads:   cfg.QoE.VMAFThreads,
 			WithAudio: !cfg.Media.NoAudio,
+			// The reference must be whatever the sender actually transmitted:
+			// the tone for the synthetic source and for an input file with no
+			// audio of its own, the file's audio otherwise.
+			SyntheticAudio: cfg.Media.UsesSyntheticAudio(),
 		},
 		verbose: verbose,
 		nextAt:  time.Now().Add(cfg.QoE.RefPeriod),

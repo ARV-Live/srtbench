@@ -18,6 +18,7 @@ import (
 	"github.com/ARV-Live/srtbench/internal/config"
 	"github.com/ARV-Live/srtbench/internal/qoe"
 	"github.com/ARV-Live/srtbench/internal/sink"
+	"github.com/ARV-Live/srtbench/internal/source"
 )
 
 // loadProfile resolves the coefficient set: a fitted file when given, else a
@@ -65,6 +66,10 @@ Round-tripping a real ingest (this is what makes run work against a server):
 Sender flags:
   -bitrate KBPS       video bitrate            -fps N
   -size WxH           resolution               -vcodec libx264|libx265
+  -input PATH         stream a media file instead of the test pattern. Its own
+                      audio is used when it has any; the synthetic 1 kHz tone
+                      stands in when it does not, so the audio half of the
+                      score applies either way.
   -no-audio           stream video only
   -impair-loss PCT    drop this % of packets before sending
   -impair-burst N     drop in runs of N (mobile links fail in bursts)
@@ -191,6 +196,9 @@ func main() {
 
 	if cfg.Session.ID == "" {
 		cfg.Session.ID = strconv.FormatInt(time.Now().Unix(), 36)
+	}
+	if err := resolveInput(cmd, &cfg); err != nil {
+		fatal(err)
 	}
 	// The sender publishes nothing on its own, so it needs no output
 	// configured; only the measuring side does.
@@ -344,6 +352,50 @@ func parseSize(s string) (int, int, bool) {
 		return 0, 0, false
 	}
 	return w, h, true
+}
+
+// resolveInput probes an -input file and records what it actually contains.
+//
+// This runs before anything is started because ffmpeg will not complain about
+// a track that is simply absent. A video-only file used with -input produced a
+// video-only stream while the configuration still said audio was on: the audio
+// half of the MOS reported "no track" for the whole run, and nothing anywhere
+// explained why. Knowing up front lets the sender substitute the synthetic tone
+// and say so, and lets the reference pass compare against whatever is actually
+// on the wire.
+func resolveInput(cmd string, cfg *config.Config) error {
+	if cfg.Media.Input == "" {
+		return nil
+	}
+	sends := cmd == "send" || cmd == "run" || cmd == "sweep"
+
+	tracks, err := source.Inspect(context.Background(), cfg.Media.Input)
+	if err != nil {
+		if sends {
+			return fmt.Errorf("-input %q cannot be read: %w", cfg.Media.Input, err)
+		}
+		// The receiver only needs the file as a reference. Losing it costs the
+		// ground truth, not the run -- but silence here would leave a dashboard
+		// with no reference and no reason.
+		fmt.Fprintf(os.Stderr,
+			"srtbench: full-reference scoring is off - the -input file cannot be read here (%v).\n"+
+				"  The parametric MOS is unaffected. Ground truth needs the same file "+
+				"reachable from both ends.\n", err)
+		cfg.QoE.Reference = false
+		return nil
+	}
+	if sends && !tracks.HasVideo {
+		return fmt.Errorf("-input %q has no video track", cfg.Media.Input)
+	}
+	cfg.Media.InputHasAudio = tracks.HasAudio
+
+	if !cfg.Media.NoAudio && !tracks.HasAudio && sends {
+		fmt.Fprintf(os.Stderr,
+			"srtbench: -input %s has no audio track; sending the synthetic 1 kHz tone "+
+				"so the audio half of the score still applies.\n"+
+				"  Pass -no-audio to stream video only instead.\n", cfg.Media.Input)
+	}
+	return nil
 }
 
 func fatal(err error) {

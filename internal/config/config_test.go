@@ -233,3 +233,29 @@ func TestMediaFromEnv(t *testing.T) {
 		t.Errorf("abitrate = %d", c.Media.AudioKbps)
 	}
 }
+
+// The sender and the reference pass must agree on what audio is on the wire.
+//
+// They read this from one place for a reason: a reference compared against the
+// wrong source still produces a plausible number, so a disagreement here would
+// publish confident nonsense rather than fail.
+func TestUsesSyntheticAudio(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		media Media
+		want  bool
+	}{
+		{"synthetic source", Media{}, true},
+		{"file with audio", Media{Input: "clip.mp4", InputHasAudio: true}, false},
+		{"file without audio", Media{Input: "clip.mp4"}, true},
+		{"no-audio, synthetic", Media{NoAudio: true}, false},
+		{"no-audio, file with audio", Media{Input: "clip.mp4", InputHasAudio: true, NoAudio: true}, false},
+		{"no-audio, file without audio", Media{Input: "clip.mp4", NoAudio: true}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.media.UsesSyntheticAudio(); got != c.want {
+				t.Errorf("got %v, want %v", got, c.want)
+			}
+		})
+	}
+}

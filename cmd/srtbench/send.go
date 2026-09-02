@@ -35,17 +35,21 @@ func runSend(ctx context.Context, cfg config.Config) error {
 	opts.Passphrase = cfg.SRT.Passphrase
 
 	spec := source.Spec{
-		Input:      cfg.Media.Input,
-		Width:      cfg.Media.Width,
-		Height:     cfg.Media.Height,
-		FPS:        cfg.Media.FPS,
-		VideoCodec: cfg.Media.VideoCodec,
-		VideoKbps:  cfg.Media.VideoKbps,
-		AudioCodec: cfg.Media.AudioCodec,
-		AudioKbps:  cfg.Media.AudioKbps,
-		NoAudio:    cfg.Media.NoAudio,
-		GOP:        cfg.Media.GOP,
-		Realtime:   true,
+		Input: cfg.Media.Input,
+		// Resolved at startup by probing the file. When it is false the tone
+		// stands in, so the audio half of the score keeps applying instead of
+		// silently disappearing.
+		InputHasAudio: cfg.Media.InputHasAudio,
+		Width:         cfg.Media.Width,
+		Height:        cfg.Media.Height,
+		FPS:           cfg.Media.FPS,
+		VideoCodec:    cfg.Media.VideoCodec,
+		VideoKbps:     cfg.Media.VideoKbps,
+		AudioCodec:    cfg.Media.AudioCodec,
+		AudioKbps:     cfg.Media.AudioKbps,
+		NoAudio:       cfg.Media.NoAudio,
+		GOP:           cfg.Media.GOP,
+		Realtime:      true,
 	}
 
 	proc, err := source.Start(ctx, spec)

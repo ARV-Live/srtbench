@@ -189,3 +189,42 @@ func TestNoKeyframeIsAnError(t *testing.T) {
 		t.Error("a segment with no keyframe was accepted")
 	}
 }
+
+// asdr's output must actually parse.
+//
+// It did not: the pattern expected a single unlabelled figure, while ffmpeg
+// prints one line per channel. RunAudio therefore ran the filter, threw every
+// number away and reported "no audio measurement" on every stream it was ever
+// given.
+func TestAudioSDRParsesEveryFormAsdrPrints(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		line string
+		want float64
+	}{
+		{"per channel", "[Parsed_asdr_0 @ 0x1] SDR ch0: -3.90367 dB", -3.90367},
+		{"unlabelled", "[Parsed_asdr_0 @ 0x1] SDR -4.79206 dB", -4.79206},
+		{"positive", "[Parsed_asdr_0 @ 0x1] SDR ch1: 22.5 dB", 22.5},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := reAudioSDR.FindStringSubmatch(c.line)
+			if m == nil {
+				t.Fatalf("no match in %q", c.line)
+			}
+			got, err := strconv.ParseFloat(m[1], 64)
+			if err != nil {
+				t.Fatalf("parse %q: %v", m[1], err)
+			}
+			if got != c.want {
+				t.Errorf("got %v, want %v", got, c.want)
+			}
+		})
+	}
+
+	// Both channels of a stereo pair must be found, since the reported figure
+	// is their mean.
+	both := "SDR ch0: -3.0 dB\nSDR ch1: -5.0 dB\n"
+	if n := len(reAudioSDR.FindAllStringSubmatch(both, -1)); n != 2 {
+		t.Errorf("found %d channels, want 2", n)
+	}
+}

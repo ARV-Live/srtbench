@@ -74,17 +74,32 @@ type Media struct {
 	// Input is a media file to stream. Empty means synthetic test patterns,
 	// which the receiver can regenerate locally as a VMAF reference without
 	// any file needing to exist on both machines.
-	Input      string `yaml:"input"`
-	Width      int    `yaml:"width"`
-	Height     int    `yaml:"height"`
-	FPS        int    `yaml:"fps"`
-	VideoCodec string `yaml:"vcodec"`
-	VideoKbps  int    `yaml:"vbitrate_kbps"`
-	AudioCodec string `yaml:"acodec"`
-	AudioKbps  int    `yaml:"abitrate_kbps"`
+	Input string `yaml:"input"`
+	// InputHasAudio records whether Input actually carries an audio track. It
+	// is resolved at startup by probing the file, never configured: a
+	// video-only file with audio enabled otherwise produced a video-only
+	// stream and silently dropped the audio half of the score.
+	InputHasAudio bool   `yaml:"-"`
+	Width         int    `yaml:"width"`
+	Height        int    `yaml:"height"`
+	FPS           int    `yaml:"fps"`
+	VideoCodec    string `yaml:"vcodec"`
+	VideoKbps     int    `yaml:"vbitrate_kbps"`
+	AudioCodec    string `yaml:"acodec"`
+	AudioKbps     int    `yaml:"abitrate_kbps"`
 	// NoAudio streams video only, for exercising the audio-absent path.
 	NoAudio bool `yaml:"no_audio"`
 	GOP     int  `yaml:"gop"`
+}
+
+// UsesSyntheticAudio reports whether the 1 kHz tone is what goes on the wire,
+// rather than an input file's own audio.
+//
+// The receiver needs this to choose a reference, and there must be exactly one
+// statement of the rule: a reference compared against the wrong source still
+// produces a plausible number, which is what makes disagreement here expensive.
+func (m Media) UsesSyntheticAudio() bool {
+	return !m.NoAudio && (m.Input == "" || !m.InputHasAudio)
 }
 
 // QoE controls scoring.

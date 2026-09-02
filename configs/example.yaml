@@ -27,6 +27,13 @@ srt:
 media:
   # Leave input empty for deterministic synthetic sources, which the receiver
   # can regenerate locally as a reference with no file transfer.
+  #
+  # A file is re-encoded to the settings below, so the operating point being
+  # measured is still this configuration. Its own audio is used when it has
+  # any; when it does not, the synthetic 1 kHz tone is sent in its place and
+  # srtbench says so, because a silently video-only stream drops the audio
+  # half of the score with nothing to explain the gap. Use no_audio for
+  # video-only on purpose.
   input: ""
   width: 1920
   height: 1080

@@ -298,7 +298,33 @@ Flags > `SRTBENCH_*` environment > YAML > defaults. See `configs/example.yaml`.
 
 Useful environment variables: `SRTBENCH_ENDPOINT`, `SRTBENCH_INFLUX_URL`,
 `SRTBENCH_INFLUX_TOKEN`, `SRTBENCH_INFLUX_ORG`, `SRTBENCH_INFLUX_BUCKET`,
-`SRTBENCH_PROFILE`, `SRTBENCH_CSV`.
+`SRTBENCH_PROFILE`, `SRTBENCH_CSV`, `SRTBENCH_INPUT`.
+
+### Streaming your own media file
+
+`-input <path>` (or `SRTBENCH_INPUT`) streams a real file instead of the
+synthetic test pattern. It is re-encoded to the configured codec, bitrate and
+GOP, so what is measured is still the configured operating point — the file
+supplies the content, not the encode.
+
+srtbench probes the file before it starts anything, and says what it found:
+
+- **The file has audio** — it is used, and the full-reference pass measures the
+  received audio against that same file.
+- **The file has no audio** — the synthetic 1 kHz tone is streamed in its place
+  and a notice says so. Without this the stream is silently video-only, and the
+  audio half of the MOS reports "no track" for the whole run with nothing
+  anywhere explaining why. Pass `-no-audio` if video-only is what you want.
+- **The file has no video, or cannot be read** — the sender refuses to start
+  rather than produce a stream that measures nothing.
+
+Video and audio are mapped explicitly from the first stream of each type, so
+cover art or a second program in the container cannot be picked instead.
+
+A file used for ground truth has to be reachable from **both** ends: the
+receiver regenerates the reference locally to compare against. When the
+receiver cannot read it, full-reference scoring is switched off and says so —
+the parametric MOS is unaffected.
 
 H.264 is the default codec because libx265 is far heavier to encode, and a
 sender that cannot keep up produces degradation indistinguishable from network

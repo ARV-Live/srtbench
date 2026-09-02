@@ -46,6 +46,13 @@ type Spec struct {
 	Threads    int
 	SyntheticV string // lavfi description, e.g. testsrc2
 	WithAudio  bool
+	// SyntheticAudio says the sender is transmitting the 1 kHz tone rather
+	// than the input file's own audio -- which is the case for the synthetic
+	// source, and also for an -input file that carries no audio track. The
+	// reference has to be whatever is actually being sent; comparing received
+	// audio against the wrong source still yields a number, which is precisely
+	// what makes it dangerous.
+	SyntheticAudio bool
 }
 
 // firstKeyframePTS reports the timestamp of the first KEYFRAME in a segment.
@@ -89,8 +96,12 @@ func firstKeyframePTS(ctx context.Context, path string) (float64, error) {
 }
 
 var (
-	reVMAF     = regexp.MustCompile(`VMAF score:\s*([0-9.]+)`)
-	reAudioSDR = regexp.MustCompile(`SDR\s+([-0-9.]+)`)
+	reVMAF = regexp.MustCompile(`VMAF score:\s*([0-9.]+)`)
+	// asdr reports one line per channel, "SDR ch0: -3.90 dB". Older builds
+	// printed a single unlabelled figure, and matching only that form is why
+	// audio SDR never appeared in the output at all: the filter ran, produced
+	// its numbers, and every one of them was discarded.
+	reAudioSDR = regexp.MustCompile(`SDR(?:\s+ch\d+)?:?\s+(-?[0-9.]+)`)
 )
 
 // Run compares a recorded segment against a freshly built reference.
@@ -184,17 +195,54 @@ func RunAudio(ctx context.Context, segment string, spec Spec, baseOffset float64
 	if !spec.WithAudio {
 		return 0, false
 	}
-	ref := "sine=frequency=1000:sample_rate=48000"
-	args := []string{"-hide_banner", "-loglevel", "info", "-nostdin",
-		"-i", segment, "-f", "lavfi", "-i", ref,
-		"-lavfi", "[0:a][1:a]asdr", "-f", "null", "-"}
+	args := []string{"-hide_banner", "-loglevel", "info", "-nostdin", "-i", segment}
+	filter := "[0:a][1:a]asdr"
+
+	if spec.SyntheticAudio || spec.Input == "" {
+		// A stationary tone is identical at every instant, so it needs no
+		// seeking to line up with the segment.
+		args = append(args, "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=48000")
+	} else {
+		// The file's own audio is what is on the wire, so the reference is the
+		// matching stretch of that file -- located the same way the video
+		// reference is, at (segment keyframe PTS - the stream's opening PTS).
+		// Measuring it against the tone instead compared two unrelated signals
+		// and reported total destruction for an intact stream.
+		pts, err := firstKeyframePTS(ctx, segment)
+		if err != nil {
+			return 0, false
+		}
+		start := pts - baseOffset
+		if start < 0 {
+			start = 0
+		}
+		args = append(args, "-ss", fmt.Sprintf("%.4f", start), "-i", spec.Input)
+		// A real file's audio can be any rate or layout, and asdr compares
+		// samples: both sides have to be brought to the same form first, and
+		// rebased so sample N meets sample N.
+		const norm = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS"
+		filter = fmt.Sprintf("[0:a]%s[dist];[1:a]%s[ref];[dist][ref]asdr", norm, norm)
+	}
+
+	// asdr stops at the shorter input, which is what bounds this against a
+	// reference far longer than the segment.
+	args = append(args, "-lavfi", filter, "-f", "null", "-")
 	out, _ := exec.CommandContext(ctx, "ffmpeg", args...).CombinedOutput()
-	if m := reAudioSDR.FindStringSubmatch(string(out)); m != nil {
+
+	// Averaged across channels: one figure per stream is what the series wants,
+	// and a stereo pair of a transcoded stream tracks together.
+	var sum float64
+	var n int
+	for _, m := range reAudioSDR.FindAllStringSubmatch(string(out), -1) {
 		if v, err := strconv.ParseFloat(m[1], 64); err == nil {
-			return v, true
+			sum += v
+			n++
 		}
 	}
-	return 0, false
+	if n == 0 {
+		return 0, false
+	}
+	return sum / float64(n), true
 }
 
 // Recorder captures a bounded slice of the received stream to disk for the
